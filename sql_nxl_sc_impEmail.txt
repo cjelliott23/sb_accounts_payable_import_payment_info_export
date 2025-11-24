@@ -1,0 +1,95 @@
+USE [service]
+GO
+/****** Object:  StoredProcedure [dbo].[nxl_sc_impEmail]    Script Date: 2/28/2024 2:44:53 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER OFF
+GO
+
+ALTER procedure [dbo].[nxl_sc_impEmail]
+as
+
+--EXEC nxl_sc_impEmail
+
+declare @email nvarchar (250),@html_error nvarchar(MAX), @html_valid nvarchar(MAX), @html nvarchar(MAX), 
+	@today char(10),@servername varchar(8000), @profile varchar(8000), @emailTO varchar(8000)
+
+select @emailTO = ''
+
+select @servername = @@SERVERNAME
+if @servername = 'NXL24\SQL2K19_DEV12'
+begin
+	select @profile = 'Canpet Web Import'
+end
+else
+begin
+	select @profile = 'Accounts Payable'
+end
+
+select @today = (CONVERT (Date, GETDATE()))
+
+create table #sc_valid (cuid char(15),VendorNo char(10),InvoiceNo char(20),InvoiceDate char(10),Amount numeric (18,2), DueDate char(10), dcreate char(10))
+create table #sc_error (cuid char(15),VendorNo char(10),InvoiceNo char(20),InvoiceDate char(10),Amount numeric (18,2), Reason text,dcreate char(10))
+
+--pulling the invoices that were created today and have not been emailed
+insert into #sc_valid
+select cuid,a.cvendno,a.cinvno,(CONVERT (Date, a.dinvoice)),a.ninvamt,(CONVERT (Date, b.ddue)),(CONVERT (Date, a.dcreate)) 
+from sc_valid a 
+left join apinvc b on a.cinvno = b.cinvno and a.cvendno = b.cvendno
+where lemailed = 0 and a.dcreate = (CONVERT (Date, GETDATE()))
+
+insert into #sc_error
+select cuid,cvendno,cinvno,(CONVERT (Date, dinvoice)),ninvamt,merror,(CONVERT (Date, dcreate)) from sc_error where lemailed = 0 and dcreate = (CONVERT (Date, GETDATE()))
+
+select @html = '<h2>ServiceChannel AP Invoices Import Report -- ' + @today + ' </h2>' 
+
+--creating the html tables
+IF EXISTS (select 1 from #sc_error)
+Begin
+EXEC spQueryToHtmlTable @html = @html_error OUTPUT,  @query = N'SELECT VendorNo,InvoiceNo,InvoiceDate,Amount,Reason FROM #sc_error', @orderBy = N'ORDER BY VendorNo,InvoiceNo ';
+select @html = @html + '<h3>AP Invoices that did not get imported</h3>' + @html_error 
+end
+
+IF EXISTS (select 1 from #sc_valid)
+Begin
+EXEC spQueryToHtmlTable @html = @html_valid OUTPUT,  @query = N'SELECT VendorNo,InvoiceNo,InvoiceDate,Amount, DueDate  FROM #sc_valid', @orderBy = N'ORDER BY VendorNo,InvoiceNo ';
+select @html = @html + '<br><h3>AP Invoices Imported</h3>' + @html_valid
+end
+
+IF EXISTS (select 1 from #sc_error) or EXISTS (select 1 from #sc_valid)
+Begin
+	declare cur_email cursor for             
+	SELECT cemail from sc_email --where cuserid not like 'NX%' -- uncomment where to not include Nexlan
+
+	open cur_email                                        
+
+	fetch next from cur_email into   
+	@email     
+	while @@fetch_status = 0       
+	begin                           
+		select @emailTO = @emailTO + @email +';'
+		fetch next from cur_email into @email 
+	end    
+	close cur_email   
+	deallocate cur_email
+
+	select @emailTO = ltrim(rtrim(@emailTO))
+
+	EXEC msdb.dbo.sp_send_dbmail
+		@profile_name = @profile,
+		@recipients = @emailTO,
+		@body = @html,
+		@subject = 'ServiceChannel AP Invoices Import Report',
+		@body_format = 'HTML',
+		@query_no_truncate = 1,
+		@attach_query_result_as_file = 0;
+
+
+
+	--marking the invoices that have been emailed 
+	update sc_error set lemailed = 1 where cuid in (select cuid from #sc_error) and dcreate in (select dcreate from #sc_error)
+	update sc_valid set lemailed = 1 where cuid in (select cuid from #sc_valid) and dcreate in (select dcreate from #sc_valid)
+end
+
+drop table #sc_valid
+drop table #sc_error

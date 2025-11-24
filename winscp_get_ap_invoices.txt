@@ -1,0 +1,20 @@
+@echo off
+
+set LOCAL_DIRECTORY="\\STSC-DB04\ServiceChannel\ap_import"
+set REMOTE_DIRECTORY = "sftp2.servicechannel.com/testing"
+
+"C:\Program Files (x86)\WinSCP\WinSCP.com" ^
+  /log="\\STSC-DB04\ServiceChannel\log\WinSCP.log" /ini=nul ^
+  /command ^
+    "open sftp:*REDACTED*""" ^
+    "get -delete outgoing/* %LOCAL_DIRECTORY%\" ^
+    "exit"
+
+set WINSCP_RESULT=%ERRORLEVEL%
+if %WINSCP_RESULT% equ 0 (
+  echo Success
+) else (
+  echo Error
+)
+
+exit /b %WINSCP_RESULT%

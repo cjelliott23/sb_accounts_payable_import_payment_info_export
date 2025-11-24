@@ -1,0 +1,3 @@
+@echo off
+copy \\STSC-DB04\ServiceChannel\ap_payment_export\* \\STSC-DB04\ServiceChannel\ap_payment_export_historical
+del /f /q  \\STSC-DB04\ServiceChannel\ap_payment_export\*

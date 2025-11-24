@@ -1,0 +1,3 @@
+call "\\STSC-DB04\ServiceChannel\bat files\get_ap_invoices.bat"
+call "\\STSC-DB04\ServiceChannel\bat files\put_ap_payments.bat"
+call "\\STSC-DB04\ServiceChannel\bat files\copydel_ap_payments.bat"

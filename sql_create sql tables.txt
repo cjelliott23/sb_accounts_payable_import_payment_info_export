@@ -1,0 +1,3 @@
+create table sc_valid (cuid char(15),cdescript char(35),cvendno char(10),cinvno char(20),dinvoice datetime,ninvamt numeric(18,4),cref char(20),dcreate datetime, lemailed smallint)
+create table sc_error (cuid char(15),cdescript char(35),cvendno char(10),cinvno char(20),dinvoice datetime,ninvamt numeric(18,4),cref char(20),merror text,dcreate datetime, lemailed smallint)
+create table sc_email (cuserid char(5) not null, cfullname char(250) not null, cemail varchar(250) not null)

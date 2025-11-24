@@ -1,0 +1,11 @@
+@echo off
+
+set LOCAL_DIRECTORY="\\STSC-DB04\ServiceChannel\ap_payment_export"
+set REMOTE_DIRECTORY = "sftp2.servicechannel.com/testing"
+
+"C:\Program Files (x86)\WinSCP\WinSCP.com" ^
+  /log="\\STSC-DB04\ServiceChannel\log\WinSCP.log" /ini=nul ^
+  /command ^
+    "open sftp:*REDACTED*""" ^
+    "put %LOCAL_DIRECTORY%\* incoming/" ^
+    "exit"

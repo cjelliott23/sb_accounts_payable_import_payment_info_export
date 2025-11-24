@@ -1,0 +1,86 @@
+USE [service]
+GO
+/****** Object:  StoredProcedure [dbo].[nxl_sc_expAPpay]    Script Date: 1/29/2024 11:29:40 AM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER OFF
+GO
+
+ALTER PROCEDURE [dbo].[nxl_sc_expAPpay] 
+AS
+
+--execute nxl_sc_expAPpay
+declare @filepath varchar(8000),@filename varchar(8000),@sqlcmd varchar(8000), @today varchar(8),@servername varchar(8000), @fullpath varchar (8000),
+@lcDosCmd varchar(8000), @sc_code char(10)
+
+select @servername = @@SERVERNAME, 
+@sc_code = '2014917610' --Service Channel Industry Code
+
+select @today = ltrim(rtrim(convert(varchar, getdate(), 112)))
+--select @today = '20231103' -- manually set the date
+
+if @servername = 'NXL24\SQL2K19_DEV12'
+begin
+	select @filepath = '\\nxl24\Suffolk Transportation\MS1202SP1\servicechannel\ap_payment_export\',
+	@filename = 'Suffolk_SC_Payments_'+@today+'.csv'
+end
+else
+begin
+	select @filepath = '\\STSC-DB04\ServiceChannel\ap_payment_export\',
+	@filename = 'Suffolk_SC_Payments_'+@today+'.csv',
+	@servername = 'STSC-DB04' -- server name is actually EC2AMAZ-SOINUBA, need to assign the alias 
+end
+
+select @fullpath = @filepath + @filename
+
+CREATE TABLE ##output(subid int, trackno int, venderno varchar(10), invoiceno varchar(25), paymentdate datetime, paymentamt numeric(18,2),paymentno varchar(100))
+CREATE TABLE #temp (subid int, trackno varchar(35), venderno varchar(10), invoiceno varchar(25), paymentdate datetime, paymentamt numeric(18,2),paymentno varchar(100))
+
+--inserting checks and ACH records into temp table
+insert into #temp
+select @sc_code,d.cdescript,a.cvendno,a.cinvno, a.dpaid,a.nfchkamt,a.cchkno
+from apcapp a 
+left join apchck b on a.cvendno = b.cvendno and a.cchkno = b.cchkno --AP checks
+left join apetrs c on a.cvendno = c.cvendno and a.cchkno = c.cchkno -- AP ACH
+left join apinvc d on a.cvendno = d.cvendno and a.cinvno = d.cinvno 
+where a.cvendno in (select cvendno from apvend where cindustry = @sc_code) and dpaid = @today
+
+--filter out descrption that is not an int (tracking will always be a number)
+declare intcheck cursor for select venderno,invoiceno,trackno from #temp
+declare @venderno varchar(10),@invoiceno varchar(25),@trackno varchar(35)
+
+open intcheck
+fetch next from intcheck into @venderno,@invoiceno,@trackno
+
+while @@FETCH_STATUS = 0
+Begin
+	IF ISNUMERIC(@trackno) = 1
+	begin
+		insert into ##output select * from #temp where venderno = @venderno and invoiceno = @invoiceno
+	end
+fetch next from intcheck into @venderno,@invoiceno,@trackno
+end
+close intcheck
+deallocate intcheck
+
+IF EXISTS (select 1 from ##output)
+Begin
+	select @sqlcmd = "select subid,trackno,invoiceno,paymentdate,paymentamt,paymentno from ##output"
+
+	select @lcDosCmd = "'bcp " + char(34) + @sqlcmd + char(34) +
+	" queryout " +
+	char(34) + @fullpath + char(34) +
+	" -c " +
+	" -t " + char(34) + ","+ char(34) +
+	" -S " + char(34) + @servername + char(34) +
+	" -U " + char(34) + "amlogin" + char(34) +
+	" -P " + char(34) + "8cctM8t3_sq1" + char(34) + "', no_output"
+
+	--select @lcDosCmd = "exec master..xp_cmdshell " + @lcDosCmd
+	select @lcDosCmd = "exec xp_cmdshell " + @lcDosCmd
+
+	exec(@lcDosCmd)
+end
+
+drop table ##output
+drop table #temp

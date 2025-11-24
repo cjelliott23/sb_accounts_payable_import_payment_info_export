@@ -1,0 +1,170 @@
+USE [service]
+GO
+/****** Object:  StoredProcedure [dbo].[nxl_sc_implist]    Script Date: 1/29/2024 11:30:58 AM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER OFF
+GO
+
+ALTER PROCEDURE [dbo].[nxl_sc_implist] 
+AS
+
+--execute nxl_sc_implist
+
+SET TEXTSIZE 2147483647
+
+declare @filepath varchar(8000),@file1 varchar(8000),@file2 varchar(8000),@sqlcmd varchar(8000), @today varchar(8),@servername varchar(8000),
+	@existfile1 smallint, @existfile2 smallint, @fullpath1 varchar (8000),@fullpath2 varchar (8000), @historypath varchar(8000)
+
+select @servername = @@SERVERNAME
+
+select @today = ltrim(rtrim(convert(varchar, getdate(), 112)))
+--select @today = '20231128' -- manually set the date
+
+if @servername = 'NXL24\SQL2K19_DEV12'
+begin
+	select @filepath = '\\nxl24\Suffolk Transportation\MS1202SP1\servicechannel\ap_import\',
+	@file1 = 'Suffolk_AccountMate_SC_eInvoice_'+@today+'.csv',
+	@file2 = 'Suffolk_External_SC_eInvoice_'+@today+'.csv',
+	@historypath = '\\nxl24\Suffolk Transportation\MS1202SP1\servicechannel\ap_import_historical'
+end
+else
+--begin
+--	select @filepath = '\\stsc-file01\AccountMate\MS1202\servicechannel\ap_import\',
+--	@file1 = 'Suffolk_AccountMate_SC_eInvoice_'+@today+'.csv',
+--	@file2 = 'Suffolk_External_SC_eInvoice_'+@today+'.csv',
+--	@historypath = '\\stsc-file01\AccountMate\MS1202\servicechannel\ap_import_historical'
+--end
+begin
+	select @filepath = '\\STSC-DB04\ServiceChannel\ap_import\',
+	@file1 = 'Suffolk_AccountMate_SC_eInvoice_'+@today+'.csv',
+	@file2 = 'Suffolk_External_SC_eInvoice_'+@today+'.csv',
+	@historypath = '\\STSC-DB04\ServiceChannel\ap_import_historical'
+end
+
+select @fullpath1 =  @filepath + @file1
+select @fullpath2 = @filepath + @file2
+
+--checking if files exist
+select @existfile1 = dbo.fn_FileExists(@fullpath1)
+select @existfile2 = dbo.fn_FileExists(@fullpath2)
+
+IF OBJECT_ID('tempdb..##sc_valid') IS NOT NULL DROP TABLE ##sc_valid
+IF OBJECT_ID('tempdb..##sc_error') IS NOT NULL DROP TABLE ##sc_error
+
+create table #sc_imp (cdescript char(35),cvendno char(10),cinvno char(20),dinvoice char(10),ninvamt numeric(18,4),cref char(20))
+create table ##sc_valid (cuid char(15),cdescript char(35),cvendno char(10),cinvno char(20),dinvoice char(10),ninvamt numeric(18,4),cref char(20))
+create table ##sc_error (cuid char(15),cdescript char(35),cvendno char(10),cinvno char(20),dinvoice char(10),ninvamt numeric(18,4),cref char(20),merror text)
+
+
+
+--importing file1
+if @existfile1 = 1
+begin
+	set @sqlcmd = "
+	BULK INSERT #sc_imp
+	FROM '"+ @fullpath1 + "'
+	WITH
+	(
+		FIRSTROW = 2,
+		FIELDTERMINATOR = ',',  --CSV field delimiter
+		ROWTERMINATOR = '\n',   --Use to shift the control to next row
+		TABLOCK
+	)
+	"
+
+	EXEC(@sqlcmd)
+end
+
+--importing file2
+if @existfile2 = 1
+begin
+	set @sqlcmd = "
+	BULK INSERT #sc_imp
+	FROM '"+ @fullpath2 + "'
+	WITH
+	(
+		FIRSTROW = 2,
+		FIELDTERMINATOR = ',',  --CSV field delimiter
+		ROWTERMINATOR = '\n',   --Use to shift the control to next row
+		TABLOCK
+	)
+	"
+
+	EXEC(@sqlcmd)
+end
+
+--Checking to see if invoice and vendor combo already exist
+insert into ##sc_error
+select substring('SCIMP' + right(newid(),10),0,16)as 'cuid',cdescript,cvendno,cinvno,dinvoice,ninvamt,cref,
+'Invoice # and Vendor# combo already exist' as 'merror' 
+from #sc_imp 
+where cvendno in ( select cvendno from apinvc) and cinvno in (select cinvno from apinvc)
+
+delete #sc_imp where cvendno in ( select cvendno from ##sc_error) and cinvno in (select cinvno from ##sc_error)
+
+--Checking to see if invoice and vendor combo already exist (Void List)
+insert into ##sc_error
+select substring('SCIMP' + right(newid(),10),0,16)as 'cuid',cdescript,cvendno,cinvno,dinvoice,ninvamt,cref,
+'Invoice # and Vendor# combo already exist (Void List)' as 'merror' 
+from #sc_imp 
+where cvendno in (select cvendno from apvinv) and cinvno in (select cinvno from apvinv)
+
+delete #sc_imp where cvendno in (select cvendno from ##sc_error) and cinvno in (select cinvno from ##sc_error)
+
+--Checking if Vendor is in archive
+insert into ##sc_error
+select substring('SCIMP' + right(newid(),10),0,16)as 'cuid',cdescript,cvendno,cinvno,dinvoice,ninvamt,cref,
+'Vendor# is in archive' as 'merror' 
+from #sc_imp 
+where cvendno in (select cvendno from apvendh)
+
+delete #sc_imp where cvendno in (select cvendno from ##sc_error) and cinvno in (select cinvno from ##sc_error)
+
+--Checking if Vendor is Active
+insert into ##sc_error
+select substring('SCIMP' + right(newid(),10),0,16)as 'cuid',cdescript,cvendno,cinvno,dinvoice,ninvamt,cref,
+'Vendor# is not Active' as 'merror' 
+from #sc_imp 
+where cvendno in (select cvendno from apvend where cstatus <> 'A')
+
+delete #sc_imp where cvendno in (select cvendno from ##sc_error) and cinvno in (select cinvno from ##sc_error)
+
+--Checking if Vendor# is Blank
+insert into ##sc_error
+select substring('SCIMP' + right(newid(),10),0,16)as 'cuid',cdescript,cvendno,cinvno,dinvoice,ninvamt,cref,
+'Vendor# is blank' as 'merror' 
+from #sc_imp 
+where cvendno = ' '
+
+delete #sc_imp where cvendno in (select cvendno from ##sc_error) and cinvno in (select cinvno from ##sc_error)
+
+--Checking if Vendor# exist
+insert into ##sc_error
+select substring('SCIMP' + right(newid(),10),0,16)as 'cuid',cdescript,cvendno,cinvno,dinvoice,ninvamt,cref,
+'Vendor# does not exist' as 'merror' 
+from #sc_imp 
+where cvendno not in (select cvendno from apvend)
+
+delete #sc_imp where cvendno in (select cvendno from ##sc_error) and cinvno in (select cinvno from ##sc_error)
+
+
+--inserting the rest of the records to the valid table
+insert into ##sc_valid
+select substring('SCIMP' + right(newid(),10),0,16)as 'cuid',cdescript,cvendno,cinvno,dinvoice,ninvamt,cref
+from #sc_imp 
+
+drop table #sc_imp
+
+
+--moving the files
+if @existfile1 = 1
+begin
+	set @sqlcmd = 'Move "'+ @fullpath1 + '" "' +@historypath+ '" '
+	EXEC xp_cmdshell  @sqlcmd
+end
+if @existfile2 = 1
+begin
+	set @sqlcmd = 'Move "'+ @fullpath2 + '" "' +@historypath+ '" '
+	EXEC xp_cmdshell  @sqlcmd
+end

@@ -1,0 +1,183 @@
+USE [service]
+GO
+/****** Object:  StoredProcedure [dbo].[nxl_sc_impAP]    Script Date: 3/11/2024 3:19:54 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+ALTER PROCEDURE [dbo].[nxl_sc_impAP]
+AS
+
+--EXECUTE nxl_sc_impAP
+
+--Calling the import
+EXECUTE nxl_sc_implist
+
+--creating temp tables
+select top 0 * into #apinvc from apinvc
+select top 0 * into #apdist from apdist
+
+--Creating AP Invoices
+insert into #apinvc
+select a.cvendno,cinvno, '' as cpono, '' as crcptno, a.cref,a.cdescript,c1099,cpayurgenc,b.cbankno,ccurrcode,'SC Import' as centerby, '' as ctype,
+	' ' as cvoucherno, ctaxcode,(CONVERT (Date, GETDATE())) as dcreate,(CONVERT (Datetime, dinvoice)) as dinvoice, ((CONVERT (Datetime, dinvoice)) + ndueday) as ddue, 
+	((CONVERT (Datetime, dinvoice)) + ndiscday) as ddisc, null dfincharg,	null as dlastpaid, null as dclosed, 0 as lhold, 0 as ltaxcb1, 0 as ltaxcb2, 0 nnondisc,
+	Round((ntermdisc / 100) * ninvamt,2)  as discamt,ninvamt,0 as napptamt, 0 as nappdisc, 0 as nappadj,	0 as napptaxwh, 0 as ndappamt,0 as nnonpamt, 0 nchrgamt, 
+	0 as npaid, 0 as nusedamt, 0 as ntaxamt1,	0 as ntaxamt2, 0 as ncomadj, 0 as ncomdic, 0 as ncomtaxwh, 0 as ntotmcvar,	0 as nmcround, 0 as nglmcround, 
+	ninvamt as nbalance, 0 as nlchrgamt, 0 as nfnondisc,	Round((ntermdisc / 100) * ninvamt,2) as nfdiscamt, ninvamt as nfinvamt, 0 as nfinvamt, 0 as nfappamt, 
+	0 as nfappdisc,	0 as nfappadj, 0 as nfapptaxwh, 0 as nfdappamt, 0 as nfnonpamt, 0 as nfchrgamt,	0 as nfpaid, 0 as nfusedamt, 0 as nfcomadj, 0 as nfcomtaxwh, 
+	ninvamt as nfbalance,	0 as nflchrgamt, 1 as nxchgrate
+from ##sc_valid a
+left join apvend b on a.cvendno = b.cvendno
+left join arpycd c on b.cpaycode = c.cpaycode
+
+--Creating Voucher # for the AP invoices
+declare @lcvoucher char(10), @lcvendno char(10), @lcinvno char(20)
+declare voucher cursor for select cvendno, cinvno from #apinvc  
+
+open voucher
+fetch next from voucher into @lcvendno,@lcinvno
+
+while @@FETCH_STATUS = 0
+begin
+	exec vsp_ap_getnewvoucherno 1, @lcvoucher output
+	update #apinvc set cvoucherno = @lcvoucher where cvendno = @lcvendno and cinvno = @lcinvno
+
+	fetch next from voucher into @lcvendno,@lcinvno
+end
+close voucher
+deallocate voucher
+--end of Creating AP Invoices
+
+--Creating AP Dist Records
+
+--Creating P records
+--select cvendno,cinvno,ctype,namount from #apdist order by cvendno, cinvno
+--select * from apdist
+insert into #apdist
+select substring('SCIMP' + right(newid(),10),0,16)as 'cuid',a.cvendno,cinvno,capacc,null as camrtexacc, ' ' as camrtmethd, '' as camrtrecur,'P' as ctype,
+	'' as coldtype, ('INVOICE'+cinvno) as cdescript, a.ccurrcode,'' as ctogl, '' as ctaxcliam, '' as crcptno, '' as clineitem, a.ctaxcode, '' as clinedesc,
+	a.dcreate,dinvoice as dtrs, null as damrtstart, null as damrtend, 0 as lamortize, 0 as lamrtlday, isnull(nversion,0) as ntaxver, (ninvamt * -1) as namount,
+	(ntaxamt1 * -1) as ntaxamt1 ,(ntaxamt2 * -1) as ntaxamt2 , 0 as ntaxamnt3,(ninvamt * -1) as nfamount, (ntaxamt1 * -1) as nftaxamt1 ,(ntaxamt2 * -1) as nftaxamt2 , 
+	0 as nftaxamnt3,nxchgrate,ntotmcvar,0 as namrtcycle 
+from #apinvc a
+left join apvend b on a.cvendno = b.cvendno
+left join arpycd c on b.cpaycode = c.cpaycode
+left join costax d on a.ctaxcode = d.ctaxcode
+
+--select * from #apdist
+--select * from #apinvc a join apvglr b on a.cvendno = b.cvendno  
+--select * from apvglr where cvendo 
+
+--Creating R records
+--declare @lcvoucher char(10), @lcvendno char(10), @lcinvno char(20)
+declare @linvoiceamt numeric (18,4), @lnRrun numeric (18,4),@lnRamt numeric (18,4), @lcuid varchar (15), @lndist numeric (18,4), @lglacct varchar (20)  
+declare Rrecords cursor for select cvendno, cinvno, ninvamt from #apinvc
+open Rrecords
+fetch next from Rrecords into @lcvendno,@lcinvno,@linvoiceamt
+while @@FETCH_STATUS = 0
+begin
+	select @lnRrun = @linvoiceamt
+	declare vendrrecords cursor for select * from apvglr where cvendno = @lcvendno
+	open vendrrecords
+	fetch next from vendrrecords into @lcuid,@lcvendno,@lglacct,@lndist
+	while @@FETCH_STATUS = 0
+	begin
+			IF @lnRrun > 0 --Postive Amount
+			begin
+				select @lnRamt = ROUND(@linvoiceamt * (@lndist/100),2) 
+				IF (@lnRrun - @lnRamt) < 0
+				begin
+					select @lnRamt = @lnRrun
+				end
+				else
+				begin
+					select @lnRrun = @lnRrun - @lnRamt
+				end			
+			end
+			else
+			begin --Negative Amt (Return)
+				select @lnRamt = ROUND(@linvoiceamt * (@lndist/100),2)
+				IF (@lnRrun - @lnRamt) > 0
+				begin
+					select @lnRamt = @lnRrun
+				end
+				else
+				begin
+					select @lnRrun = @lnRrun - @lnRamt
+				end	
+			end
+
+			insert into #apdist
+			select substring('SCIMP' + right(newid(),10),0,16)as 'cuid',a.cvendno,cinvno,cglacc,null as camrtexacc, ' ' as camrtmethd, '' as camrtrecur,'R' as ctype,
+				'' as coldtype, ('INV -# '+cinvno) as cdescript, a.ccurrcode,'' as ctogl, '' as ctaxcliam, '' as crcptno, '' as clineitem, a.ctaxcode, '' as clinedesc,
+				a.dcreate,dinvoice as dtrs, null as damrtstart, null as damrtend, 0 as lamortize, 0 as lamrtlday, isnull(nversion,0) as ntaxver, 
+				@lnRamt as namount,Round((ndist / 100) * ntaxamt1,2) as ntaxamt1 ,Round((ndist / 100) * ntaxamt2,2) as ntaxamt2 , 
+				0 as ntaxamnt3,@lnRamt as nfamount, Round((ndist / 100) * ntaxamt1,2) as nftaxamt1 ,Round((ndist / 100) * ntaxamt2,2) as nftaxamt2 , 
+				0 as nftaxamnt3,nxchgrate,ntotmcvar,0 as namrtcycle 
+			from #apinvc a
+			left join apvend b on a.cvendno = b.cvendno
+			left join arpycd c on b.cpaycode = c.cpaycode
+			left join costax d on a.ctaxcode = d.ctaxcode
+			left join apvglr e on a.cvendno = e.cvendno
+			where a.cvendno = @lcvendno and a.cinvno = @lcinvno and cglacc = @lglacct 			
+	
+	fetch next from vendrrecords into @lcuid,@lcvendno,@lglacct,@lndist
+	end
+	close vendrrecords
+	deallocate vendrrecords
+
+fetch next from Rrecords into @lcvendno,@lcinvno,@linvoiceamt
+end
+close Rrecords
+deallocate Rrecords
+
+--select * from #apdist
+
+
+
+
+----Creating R Records NXL_CJE_20240311 commented out
+--insert into #apdist
+--select substring('SCIMP' + right(newid(),10),0,16)as 'cuid',a.cvendno,cinvno,cglacc,null as camrtexacc, ' ' as camrtmethd, '' as camrtrecur,'R' as ctype,
+--	'' as coldtype, ('INV -# '+cinvno) as cdescript, a.ccurrcode,'' as ctogl, '' as ctaxcliam, '' as crcptno, '' as clineitem, a.ctaxcode, '' as clinedesc,
+--	a.dcreate,dinvoice as dtrs, null as damrtstart, null as damrtend, 0 as lamortize, 0 as lamrtlday, isnull(nversion,0) as ntaxver, 
+--	Round((ndist / 100) * ninvamt,2) as namount,Round((ndist / 100) * ntaxamt1,2) as ntaxamt1 ,Round((ndist / 100) * ntaxamt2,2) as ntaxamt2 , 
+--	0 as ntaxamnt3,Round((ndist / 100) * ninvamt,2) as nfamount, Round((ndist / 100) * ntaxamt1,2) as nftaxamt1 ,Round((ndist / 100) * ntaxamt2,2) as nftaxamt2 , 
+--	0 as nftaxamnt3,nxchgrate,ntotmcvar,0 as namrtcycle 
+--from #apinvc a
+--left join apvend b on a.cvendno = b.cvendno
+--left join arpycd c on b.cpaycode = c.cpaycode
+--left join costax d on a.ctaxcode = d.ctaxcode
+--left join apvglr e on a.cvendno = e.cvendno
+--NXL_CJE_20240311 commented out
+
+-- end of Creating AP Dist Records
+
+----adding columns to temp list
+--Alter table ##sc_valid add dcreate datetime default (CONVERT (Date, GETDATE()))
+--Alter table ##sc_valid add lemailed smallint default 0
+--Alter table ##sc_error add dcreate datetime default (CONVERT (Date, GETDATE()))
+--Alter table ##sc_error add lemailed smallint default 0
+
+--update ##sc_valid set dcreate = (CONVERT (Date, GETDATE())), lemailed = 0
+--update ##sc_error set dcreate = (CONVERT (Date, GETDATE())), lemailed = 0
+
+--making changes to AccountMate data
+begin transaction
+	insert into apinvc select * from #apinvc
+	insert into apdist select * from #apdist
+	
+	insert into sc_valid 
+	select cuid,cdescript,cvendno,cinvno,dinvoice,ninvamt,cref,(CONVERT (Date, GETDATE())),0
+	from ##sc_valid
+	
+	insert into sc_error 
+	select cuid,cdescript,cvendno,cinvno,dinvoice,ninvamt,cref, merror, (CONVERT (Date, GETDATE())),0
+	from ##sc_error
+COMMIT
+
+drop table ##sc_valid
+drop table ##sc_error
+drop table #apinvc
+drop table #apdist
