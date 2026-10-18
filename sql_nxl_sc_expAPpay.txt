@@ -74,7 +74,7 @@ Begin
 	" -t " + char(34) + ","+ char(34) +
 	" -S " + char(34) + @servername + char(34) +
 	" -U " + char(34) + "amlogin" + char(34) +
-	" -P " + char(34) + "8cctM8t3_sq1" + char(34) + "', no_output"
+	" -P " + char(34) + "REDACTED" + char(34) + "', no_output"
 
 	--select @lcDosCmd = "exec master..xp_cmdshell " + @lcDosCmd
 	select @lcDosCmd = "exec xp_cmdshell " + @lcDosCmd
